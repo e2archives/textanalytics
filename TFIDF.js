@@ -1,20 +1,49 @@
 //TF(t) = (Number of times term t appears in a document) / (Total number of terms in the document).
 //IDF(t) = log_e(Total number of documents / Number of documents with term t in it).
 
-function TFIDF_array(arrayOffiles)
+var fs = require('graceful-fs');
+
+var files = fs.readdirSync('docs').map(function(d){return "docs/"+d})
+
+
+var stopwords = fs.readFileSync('sample_data/stopwords.csv',{encoding:"utf8"})
+					.trim()
+					.split(',')
+TFIDF_array(files,stopwords);
+
+function tokenize(text, stopwords)
+{
+	var tmp = text.replace(/[^A-Za-z0-9_\. @\-]/g,'')
+				.replace(/([_\. @\-]){2,}/g,'$1')
+				.replace(/([a-z]+)(\-)(?=[a-z]+)/gi,'$1 ')
+				.replace(/(\d+\.\d+)|\b([A-Z])\b|[^\-a-zA-Z](\d+)\b/gi,'')
+				.replace(/(\.)([\s\n\r\t]*)/g,' ')
+				.replace(/[ ]{1,}/g,' ')
+				.toLowerCase()
+				.trim();
+	if (stopwords)
+	{
+		var regex = new RegExp(stopwords.map(function(d){return "\b"+d+"\b";}).join('|'),'gi');
+		tmp = tmp.replace(regex,'');
+	}
+	return tmp.split(' ')
+}
+
+function TFIDF_array(arrayOffiles,stopwords)
 {
 	var mrcluster = require("mrcluster");
 
 	mrcluster.init()
 		.file(arrayOffiles)
-		.cache(arrayOffiles.length)
+		.cache({docCount:arrayOffiles.length,stopwords:stopwords})
 		.lineDelimiter('\n')
 		.blockSize(1)
 		.numMappers(2)
 		.numReducers(3)
+		.fn("tokenize",tokenize)
 		.map(function (line) {
 			var hashtable = {},
-				words = tokenize(line);
+				words = _fn.tokenize(line,ctx._cache.stopwords);
 			hashtable["##"+ctx._file] = hashtable["#"+ctx._file] || 0;
 			words.forEach(function(word){
 				hashtable[word]=hashtable[word]||{};
@@ -47,19 +76,19 @@ function TFIDF_array(arrayOffiles)
 				{
 					++docFreq;
 				}
-				var IDF = Math.log(ctx._cache/docFreq);
+				var IDF = Math.log(ctx._cache.docCount/docFreq);
+				if (IDF == 0) continue; // word appears in all doc, useless
 				for (var doc in docs)
 				{
 					docs[doc]*=IDF;
 				}
 				wordTable[word] = docs;
-				fs.appendFile('TFIDF.csv');
 			}
+			//console.log(wordTable)
 			return {words:wordTable, docs:docTable};
 		})
 		.aggregate(function(array){
-			var lines = "",
-				termFreqDoc = {};		
+			var termFreqDoc = {};		
 			array.forEach(function(obj){
 				var docs = obj.docs;
 				for (var doc in docs) 
@@ -67,6 +96,9 @@ function TFIDF_array(arrayOffiles)
 					termFreqDoc[doc] = docs[doc];
 				}
 			});
+
+			var res = {};
+			
 			array.forEach(function(obj){
 				var words = obj.words;
 				for (var word in words) 
@@ -74,12 +106,21 @@ function TFIDF_array(arrayOffiles)
 					var docs = words[word];
 					for (var doc in docs)
 					{
-						docs[doc]/=termFreqDoc[doc];
-						lines += doc+","+word+","+docs[doc]+"\n";
+						res[doc] = res[doc] || [];
+						var tfidf = docs[doc]/termFreqDoc[doc];
+						if (tfidf > 0) res[doc].push({word:word,tfidf:tfidf});
 					}
 				}
 			});
-			fs.appendFileSync("TFIDF.csv",lines);
+			
+			var lines = "";
+			for (var doc in res)
+			{
+				res[doc].sort(function(a,b){return b.tfidf-a.tfidf;})
+						.forEach(function(d){lines+=doc+","+d.word+","+d.tfidf+"\n"})
+				
+			}
+			fs.writeFileSync("TFIDF.csv",lines);
 		})
 		.start();
 
